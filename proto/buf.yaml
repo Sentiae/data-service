@@ -1,0 +1,13 @@
+version: v1
+name: buf.build/sentiae/data-service
+breaking:
+  use:
+    - FILE
+lint:
+  use:
+    - DEFAULT
+  except:
+    # Mirrors ops-service / identity-service: a single proto file hosts
+    # multiple services + shared messages, so the one-service rule would
+    # force an unnecessary split.
+    - PACKAGE_VERSION_SUFFIX

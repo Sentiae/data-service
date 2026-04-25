@@ -1,40 +1,57 @@
-// Package canvasservice is a narrow HTTP client that data-service
-// uses to push query results into canvas-service alongside the durable
-// Kafka fan-out. Closes §19.1 flow 1G.
+// Package canvasservice is a gRPC client that data-service uses to push
+// query results into canvas-service alongside the durable Kafka fan-out.
+// Closes §19.1 flow 1G.
+//
+// Platform rule: service↔service = gRPC. The legacy HTTP client was
+// removed in Foxtrot.
 package canvasservice
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	canvasv1 "github.com/sentiae/canvas-service/gen/proto/canvas/v1"
 )
 
-// Client posts query-result rows into canvas-service.
+// Client pushes query-result rows into canvas-service via
+// CanvasService.UpdateDashboardNodeResults.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	// ServiceToken is sent as Bearer so canvas-service's auth middleware
-	// treats data-service as an authenticated caller.
-	ServiceToken string
-	// ServiceUserID is the pseudo-user-id data-service acts as.
+	conn    *grpc.ClientConn
+	client  canvasv1.CanvasServiceClient
+	timeout time.Duration
+
+	// ServiceToken / ServiceUserID travel as gRPC metadata so canvas's
+	// interceptor can attribute writes to data-service.
+	ServiceToken  string
 	ServiceUserID string
 }
 
-// NewClient builds a Client. An empty baseURL disables the push path.
-func NewClient(baseURL string, timeout time.Duration) *Client {
+// NewClient dials canvas-service's gRPC listener. An empty grpcAddr
+// disables the push path.
+func NewClient(grpcAddr string, timeout time.Duration) *Client {
+	if grpcAddr == "" {
+		return &Client{}
+	}
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	conn, err := grpc.NewClient(grpcAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return &Client{timeout: timeout}
+	}
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: timeout},
+		conn:    conn,
+		client:  canvasv1.NewCanvasServiceClient(conn),
+		timeout: timeout,
 	}
 }
 
@@ -50,53 +67,88 @@ type QueryResultPayload struct {
 	Error      string           `json:"error,omitempty"`
 }
 
+func (c *Client) outCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	md := metadata.MD{}
+	if c.ServiceToken != "" {
+		md.Set("authorization", "Bearer "+c.ServiceToken)
+	}
+	if c.ServiceUserID != "" {
+		md.Set("x-user-id", c.ServiceUserID)
+	}
+	if len(md) > 0 {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+	return context.WithTimeout(ctx, c.timeout)
+}
+
+func (c *Client) buildReq(canvasID, nodeID uuid.UUID, payload QueryResultPayload) (*canvasv1.UpdateDashboardNodeResultsRequest, error) {
+	rows := make([]*canvasv1.DashboardQueryRow, 0, len(payload.Rows))
+	for _, r := range payload.Rows {
+		rowBytes, err := json.Marshal(r)
+		if err != nil {
+			return nil, fmt.Errorf("canvasservice: marshal row: %w", err)
+		}
+		rows = append(rows, &canvasv1.DashboardQueryRow{RowJson: rowBytes})
+	}
+	executedAt := ""
+	if !payload.ExecutedAt.IsZero() {
+		executedAt = payload.ExecutedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return &canvasv1.UpdateDashboardNodeResultsRequest{
+		CanvasId:   canvasID.String(),
+		NodeId:     nodeID.String(),
+		QueryId:    payload.QueryID,
+		Rows:       rows,
+		Columns:    payload.Columns,
+		RowCount:   int32(payload.RowCount),
+		DurationMs: payload.DurationMS,
+		Status:     payload.Status,
+		ExecutedAt: executedAt,
+		Error:      payload.Error,
+	}, nil
+}
+
 // ApplyQueryResult pushes the result rows to the target canvas node.
 func (c *Client) ApplyQueryResult(ctx context.Context, canvasID, nodeID uuid.UUID, payload QueryResultPayload) error {
-	if c == nil || c.baseURL == "" {
+	if c == nil || c.client == nil {
 		return nil
 	}
-	url := fmt.Sprintf("%s/api/v1/canvases/%s/nodes/%s/query-result", c.baseURL, canvasID, nodeID)
-	return c.post(ctx, url, payload)
+	req, err := c.buildReq(canvasID, nodeID, payload)
+	if err != nil {
+		return err
+	}
+	out, cancel := c.outCtx(ctx)
+	defer cancel()
+	if _, err := c.client.UpdateDashboardNodeResults(out, req); err != nil {
+		return fmt.Errorf("canvasservice: UpdateDashboardNodeResults: %w", err)
+	}
+	return nil
 }
 
 // ApplyQueryResultByNode pushes the result rows without knowing the
 // owning canvas id — canvas-service resolves the canvas from the node
-// record.
+// record. An empty canvas_id on the gRPC request signals this lookup.
 func (c *Client) ApplyQueryResultByNode(ctx context.Context, nodeID uuid.UUID, payload QueryResultPayload) error {
-	if c == nil || c.baseURL == "" {
+	if c == nil || c.client == nil {
 		return nil
 	}
-	url := fmt.Sprintf("%s/api/v1/canvas-nodes/%s/query-result", c.baseURL, nodeID)
-	return c.post(ctx, url, payload)
-}
-
-func (c *Client) post(ctx context.Context, url string, body any) error {
-	b, err := json.Marshal(body)
+	req, err := c.buildReq(uuid.Nil, nodeID, payload)
 	if err != nil {
-		return fmt.Errorf("canvasservice: marshal: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
-	if err != nil {
-		return fmt.Errorf("canvasservice: new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if c.ServiceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.ServiceToken)
-	}
-	if c.ServiceUserID != "" {
-		req.Header.Set("X-User-ID", c.ServiceUserID)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("[canvasservice.data] POST %s failed: %v", url, err)
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-		log.Printf("[canvasservice.data] POST %s returned %d: %s", url, resp.StatusCode, string(respBody))
-		return fmt.Errorf("canvasservice: %s returned %d", url, resp.StatusCode)
+	req.CanvasId = ""
+	out, cancel := c.outCtx(ctx)
+	defer cancel()
+	if _, err := c.client.UpdateDashboardNodeResults(out, req); err != nil {
+		return fmt.Errorf("canvasservice: UpdateDashboardNodeResults(by-node): %w", err)
 	}
 	return nil
+}
+
+// Close releases the underlying gRPC channel.
+func (c *Client) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
 }

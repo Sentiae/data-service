@@ -63,6 +63,7 @@ func (p *capturingPublisher) Publish(_ context.Context, eventType string, data k
 }
 func (p *capturingPublisher) PublishBatch(_ context.Context, _ []kafka.Event) error { return nil }
 func (p *capturingPublisher) Close() error                                          { return nil }
+func (p *capturingPublisher) EnsureTopics(_ context.Context) error                  { return nil }
 
 // --- DB harness --------------------------------------------------------------
 

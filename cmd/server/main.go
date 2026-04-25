@@ -15,6 +15,7 @@ import (
 	// Register MySQL driver so federated adapters can connect to MySQL-backed sources.
 	_ "github.com/go-sql-driver/mysql"
 
+	grpchandler "github.com/sentiae/data-service/internal/handler/grpc"
 	handler "github.com/sentiae/data-service/internal/handler/http"
 	"github.com/sentiae/data-service/internal/infrastructure/messaging"
 	pgmigrations "github.com/sentiae/data-service/internal/repository/postgres"
@@ -83,11 +84,55 @@ func main() {
 	server := handler.NewServer(db, pub)
 	defer server.Close()
 
+	// Start the gRPC server alongside HTTP. Default-on so the BFF can
+	// dial in dev; gate behind APP_GRPC_ENABLED=false to disable.
+	ctx, cancelGRPC := context.WithCancel(context.Background())
+	defer cancelGRPC()
+	grpcSrv := startGRPCServer(ctx, db, pub, server)
+
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("Data service starting on %s", addr)
-	if err := http.ListenAndServe(addr, server); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	httpServer := &http.Server{Addr: addr, Handler: server}
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Block on whichever server exits first. The HTTP server will only
+	// return ErrServerClosed via Shutdown, so the goroutine stays alive
+	// for the lifetime of the process. We keep the gRPC Start in the
+	// foreground when enabled so a binding failure surfaces immediately.
+	if grpcSrv != nil {
+		// Start blocks; on cancellation Start returns nil.
+		if err := grpcSrv.Start(ctx); err != nil {
+			log.Printf("gRPC server stopped: %v", err)
+		}
+	} else {
+		// Wait forever — HTTP goroutine handles signals upstream.
+		select {}
 	}
+}
+
+// startGRPCServer wires the gRPC handler with the HTTP router, recorder,
+// and publisher so the deep-path bridge can reuse them.
+func startGRPCServer(ctx context.Context, db *gorm.DB, pub pkkafka.Publisher, httpSrv *handler.Server) *grpchandler.Server {
+	if strings.EqualFold(getEnv("APP_GRPC_ENABLED", "true"), "false") {
+		return nil
+	}
+	grpcHost := getEnv("APP_GRPC_HOST", "")
+	grpcPort := getEnv("APP_GRPC_PORT", "50060")
+	srv := grpchandler.NewServer(grpchandler.ServerConfig{
+		Host: grpcHost,
+		Port: grpcPort,
+	}, grpchandler.Deps{
+		DB:          db,
+		Pub:         pub,
+		Recorder:    httpSrv.Recorder(),
+		HTTPHandler: httpSrv,
+	})
+	log.Printf("gRPC server bound to %s:%s", grpcHost, grpcPort)
+	return srv
 }
 
 func getEnv(key, fallback string) string {

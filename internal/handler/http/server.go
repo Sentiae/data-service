@@ -31,7 +31,17 @@ type Server struct {
 	alertWorker  *usecase.DashboardAlertWorker
 	embedWorker  *usecase.DashboardEmbedExpiryWorker
 	workerCancel context.CancelFunc
+	recorder     timetravel.Recorder
+	pub          kafka.Publisher
 }
+
+// Recorder exposes the time-travel recorder so the gRPC server can
+// reuse it for entity snapshots without re-bootstrapping AutoMigrate.
+func (s *Server) Recorder() timetravel.Recorder { return s.recorder }
+
+// Publisher exposes the Kafka publisher so the gRPC server can emit
+// the same lifecycle events as the HTTP handlers.
+func (s *Server) Publisher() kafka.Publisher { return s.pub }
 
 // Close tears down background workers. Called by main.go on shutdown.
 func (s *Server) Close() {
@@ -184,6 +194,8 @@ func NewServer(db *gorm.DB, pub kafka.Publisher) *Server {
 		alertWorker:  alertWorker,
 		embedWorker:  embedWorker,
 		workerCancel: cancel,
+		recorder:     recorder,
+		pub:          pub,
 	}
 }
 

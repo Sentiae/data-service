@@ -4,7 +4,9 @@
 package messaging
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/sentiae/platform-kit/kafka"
 )
@@ -55,5 +57,10 @@ func InitFromEnv(cfg Config) Publisher {
 		return NewNoopPublisher()
 	}
 	log.Printf("data-service: Kafka publisher initialized (brokers=%v)", cfg.Brokers)
+	ensureCtx, ensureCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := pub.EnsureTopics(ensureCtx); err != nil {
+		log.Printf("data-service: Kafka EnsureTopics failed: %v (continuing)", err)
+	}
+	ensureCancel()
 	return pub
 }

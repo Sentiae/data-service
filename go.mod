@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/mattn/go-sqlite3 v1.14.28
+	github.com/sentiae/canvas-service v0.0.0-00010101000000-000000000000
 	github.com/sentiae/foundry-service v0.1.0
 	github.com/sentiae/ops-service v0.0.0-00010101000000-000000000000
 	github.com/sentiae/permission-service v0.2.0
@@ -124,3 +125,5 @@ replace github.com/sentiae/permission-service => ../permission-service
 replace github.com/sentiae/foundry-service => ../foundry-service
 
 replace github.com/sentiae/ops-service => ../ops-service
+
+replace github.com/sentiae/canvas-service => ../canvas-service

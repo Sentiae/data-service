@@ -1,0 +1,457 @@
+syntax = "proto3";
+
+package data.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/sentiae/data-service/gen/data/v1;datav1";
+
+// =============================================================================
+// DataSourceService — CRUD + sync for data_sources, plus semantic_field CRUD
+// for the per-source semantic layer.
+// =============================================================================
+
+message DataSource {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string engine = 5;
+  string connection_id = 6; // optional uuid string; empty when unset.
+  string connection_dsn = 7;
+  string schema = 8;
+  repeated string tables = 9;
+  string status = 10;
+  google.protobuf.Timestamp last_sync_at = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message SemanticField {
+  string id = 1;
+  string data_source_id = 2;
+  string table_name = 3;
+  string column_name = 4;
+  string business_name = 5;
+  string description = 6;
+  string data_type = 7;
+  string aggregation = 8;
+  string unit = 9;
+  repeated string tags = 10;
+  repeated string synonyms = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+service DataSourceService {
+  rpc CreateDataSource(CreateDataSourceRequest) returns (CreateDataSourceResponse);
+  rpc GetDataSource(GetDataSourceRequest) returns (GetDataSourceResponse);
+  rpc UpdateDataSource(UpdateDataSourceRequest) returns (UpdateDataSourceResponse);
+  rpc DeleteDataSource(DeleteDataSourceRequest) returns (DeleteDataSourceResponse);
+  rpc ListDataSources(ListDataSourcesRequest) returns (ListDataSourcesResponse);
+  rpc SyncSchema(SyncSchemaRequest) returns (SyncSchemaResponse);
+
+  rpc ListSemanticFields(ListSemanticFieldsRequest) returns (ListSemanticFieldsResponse);
+  rpc CreateSemanticField(CreateSemanticFieldRequest) returns (CreateSemanticFieldResponse);
+  rpc UpdateSemanticField(UpdateSemanticFieldRequest) returns (UpdateSemanticFieldResponse);
+  rpc DeleteSemanticField(DeleteSemanticFieldRequest) returns (DeleteSemanticFieldResponse);
+}
+
+message CreateDataSourceRequest {
+  string organization_id = 1;
+  string actor_id = 2;
+  string name = 3;
+  string engine = 4;
+  string description = 5;
+  string connection_id = 6; // optional
+  string connection_dsn = 7;
+  string schema = 8;
+}
+message CreateDataSourceResponse { DataSource data_source = 1; }
+
+message GetDataSourceRequest { string id = 1; }
+message GetDataSourceResponse { DataSource data_source = 1; }
+
+message UpdateDataSourceRequest {
+  string id = 1;
+  string actor_id = 2;
+  // Optional fields; presence = update intent. Empty string clears
+  // free-form text fields.
+  bool update_name = 3;
+  string name = 4;
+  bool update_description = 5;
+  string description = 6;
+  bool update_schema = 7;
+  string schema = 8;
+}
+message UpdateDataSourceResponse { DataSource data_source = 1; }
+
+message DeleteDataSourceRequest { string id = 1; }
+message DeleteDataSourceResponse { bool deleted = 1; }
+
+message ListDataSourcesRequest { string organization_id = 1; }
+message ListDataSourcesResponse { repeated DataSource items = 1; }
+
+message SyncSchemaRequest {
+  string id = 1;
+  string actor_id = 2;
+}
+message SyncSchemaResponse { DataSource data_source = 1; }
+
+message ListSemanticFieldsRequest { string data_source_id = 1; }
+message ListSemanticFieldsResponse { repeated SemanticField items = 1; }
+
+message CreateSemanticFieldRequest {
+  string data_source_id = 1;
+  string organization_id = 2;
+  string actor_id = 3;
+  string table_name = 4;
+  string column_name = 5;
+  string business_name = 6;
+  string description = 7;
+  string data_type = 8;
+  string aggregation = 9;
+  string unit = 10;
+  repeated string tags = 11;
+}
+message CreateSemanticFieldResponse { SemanticField field = 1; }
+
+message UpdateSemanticFieldRequest {
+  string id = 1;
+  string actor_id = 2;
+  bool update_business_name = 3;
+  string business_name = 4;
+  bool update_description = 5;
+  string description = 6;
+  bool update_data_type = 7;
+  string data_type = 8;
+  bool update_aggregation = 9;
+  string aggregation = 10;
+  bool update_unit = 11;
+  string unit = 12;
+  bool update_tags = 13;
+  repeated string tags = 14;
+  bool update_synonyms = 15;
+  repeated string synonyms = 16;
+}
+message UpdateSemanticFieldResponse { SemanticField field = 1; }
+
+message DeleteSemanticFieldRequest { string id = 1; }
+message DeleteSemanticFieldResponse { bool deleted = 1; }
+
+// =============================================================================
+// DataQueryService — saved-query CRUD + execution + NL→SQL.
+// =============================================================================
+
+message DataQuery {
+  string id = 1;
+  string organization_id = 2;
+  string data_source_id = 3;
+  string canvas_node_id = 4; // optional uuid string
+  string name = 5;
+  string description = 6;
+  string query_type = 7;
+  string raw_query = 8;
+  string natural_language = 9;
+  int32 cache_ttl_sec = 10;
+  bool read_only = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message QueryExecution {
+  string id = 1;
+  string query_id = 2;
+  string status = 3;
+  int32 row_count = 4;
+  int64 duration_ms = 5;
+  google.protobuf.Struct result = 6;
+  string error = 7;
+  google.protobuf.Timestamp executed_at = 8;
+}
+
+message NLQueryCandidate {
+  string data_source_id = 1;
+  string name = 2;
+  string engine = 3;
+  double confidence = 4;
+  string reasoning = 5;
+}
+
+message NLQueryResult {
+  string query_id = 1;
+  string question = 2;
+  string generated_sql = 3;
+  string semantic_context = 4;
+  string status = 5;
+  bool needs_selection = 6;
+  string selected_data_source_id = 7;
+  string selection_reasoning = 8;
+  repeated NLQueryCandidate candidates = 9;
+}
+
+service DataQueryService {
+  rpc CreateDataQuery(CreateDataQueryRequest) returns (CreateDataQueryResponse);
+  rpc GetDataQuery(GetDataQueryRequest) returns (GetDataQueryResponse);
+  rpc UpdateDataQuery(UpdateDataQueryRequest) returns (UpdateDataQueryResponse);
+  rpc DeleteDataQuery(DeleteDataQueryRequest) returns (DeleteDataQueryResponse);
+  rpc ListDataQueries(ListDataQueriesRequest) returns (ListDataQueriesResponse);
+  rpc ExecuteDataQuery(ExecuteDataQueryRequest) returns (ExecuteDataQueryResponse);
+  rpc ListQueryExecutions(ListQueryExecutionsRequest) returns (ListQueryExecutionsResponse);
+  rpc NaturalLanguageQuery(NaturalLanguageQueryRequest) returns (NaturalLanguageQueryResponse);
+}
+
+message CreateDataQueryRequest {
+  string organization_id = 1;
+  string actor_id = 2;
+  string data_source_id = 3;
+  string canvas_node_id = 4; // optional
+  string name = 5;
+  string description = 6;
+  string query_type = 7;
+  string raw_query = 8;
+  string natural_language = 9;
+  int32 cache_ttl_sec = 10;
+  bool read_only = 11;
+}
+message CreateDataQueryResponse { DataQuery query = 1; }
+
+message GetDataQueryRequest { string id = 1; }
+message GetDataQueryResponse { DataQuery query = 1; }
+
+message UpdateDataQueryRequest {
+  string id = 1;
+  string actor_id = 2;
+  bool update_name = 3;
+  string name = 4;
+  bool update_description = 5;
+  string description = 6;
+  bool update_raw_query = 7;
+  string raw_query = 8;
+  bool update_cache_ttl_sec = 9;
+  int32 cache_ttl_sec = 10;
+  bool update_read_only = 11;
+  bool read_only = 12;
+}
+message UpdateDataQueryResponse { DataQuery query = 1; }
+
+message DeleteDataQueryRequest { string id = 1; }
+message DeleteDataQueryResponse { bool deleted = 1; }
+
+message ListDataQueriesRequest {
+  string organization_id = 1;
+  string data_source_id = 2; // optional
+}
+message ListDataQueriesResponse { repeated DataQuery items = 1; }
+
+message ExecuteDataQueryRequest {
+  string id = 1;
+  string actor_id = 2;
+}
+message ExecuteDataQueryResponse { QueryExecution execution = 1; }
+
+message ListQueryExecutionsRequest { string query_id = 1; }
+message ListQueryExecutionsResponse { repeated QueryExecution items = 1; }
+
+message NaturalLanguageQueryRequest {
+  string organization_id = 1;
+  string actor_id = 2;
+  string data_source_id = 3; // optional
+  string question = 4;
+}
+message NaturalLanguageQueryResponse { NLQueryResult result = 1; }
+
+// =============================================================================
+// DashboardService — config CRUD + permission grants + embed tokens.
+// =============================================================================
+
+message DashboardConfig {
+  string id = 1;
+  string organization_id = 2;
+  string canvas_node_id = 3; // optional
+  string name = 4;
+  string description = 5;
+  int32 version = 6;
+  google.protobuf.Struct panels = 7;
+  google.protobuf.Struct layout = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message DashboardPermission {
+  string id = 1;
+  string dashboard_id = 2;
+  string principal_type = 3;
+  string principal_id = 4;
+  string permission = 5;
+  string granted_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message DashboardEmbedToken {
+  string dashboard_id = 1;
+  string embed_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  bool enabled = 4;
+}
+
+message DashboardEmbedView {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  int32 version = 5;
+  google.protobuf.Struct panels = 6;
+  google.protobuf.Struct layout = 7;
+}
+
+service DashboardService {
+  rpc CreateDashboard(CreateDashboardRequest) returns (CreateDashboardResponse);
+  rpc GetDashboard(GetDashboardRequest) returns (GetDashboardResponse);
+  rpc UpdateDashboard(UpdateDashboardRequest) returns (UpdateDashboardResponse);
+  rpc DeleteDashboard(DeleteDashboardRequest) returns (DeleteDashboardResponse);
+  rpc ListDashboards(ListDashboardsRequest) returns (ListDashboardsResponse);
+
+  rpc ListDashboardPermissions(ListDashboardPermissionsRequest) returns (ListDashboardPermissionsResponse);
+  rpc CreateDashboardPermission(CreateDashboardPermissionRequest) returns (CreateDashboardPermissionResponse);
+  rpc DeleteDashboardPermission(DeleteDashboardPermissionRequest) returns (DeleteDashboardPermissionResponse);
+
+  rpc RotateDashboardEmbedToken(RotateDashboardEmbedTokenRequest) returns (RotateDashboardEmbedTokenResponse);
+  rpc GetDashboardByEmbedToken(GetDashboardByEmbedTokenRequest) returns (GetDashboardByEmbedTokenResponse);
+}
+
+message CreateDashboardRequest {
+  string organization_id = 1;
+  string actor_id = 2;
+  string canvas_node_id = 3; // optional
+  string name = 4;
+  string description = 5;
+  google.protobuf.Struct panels = 6;
+  google.protobuf.Struct layout = 7;
+}
+message CreateDashboardResponse { DashboardConfig dashboard = 1; }
+
+message GetDashboardRequest { string id = 1; }
+message GetDashboardResponse { DashboardConfig dashboard = 1; }
+
+message UpdateDashboardRequest {
+  string id = 1;
+  string actor_id = 2;
+  bool update_name = 3;
+  string name = 4;
+  bool update_description = 5;
+  string description = 6;
+  bool update_panels = 7;
+  google.protobuf.Struct panels = 8;
+  bool update_layout = 9;
+  google.protobuf.Struct layout = 10;
+}
+message UpdateDashboardResponse { DashboardConfig dashboard = 1; }
+
+message DeleteDashboardRequest { string id = 1; }
+message DeleteDashboardResponse { bool deleted = 1; }
+
+message ListDashboardsRequest { string organization_id = 1; }
+message ListDashboardsResponse { repeated DashboardConfig items = 1; }
+
+message ListDashboardPermissionsRequest { string dashboard_id = 1; }
+message ListDashboardPermissionsResponse { repeated DashboardPermission items = 1; }
+
+message CreateDashboardPermissionRequest {
+  string dashboard_id = 1;
+  string actor_id = 2;
+  string principal_type = 3;
+  string principal_id = 4;
+  string permission = 5;
+}
+message CreateDashboardPermissionResponse { DashboardPermission permission = 1; }
+
+message DeleteDashboardPermissionRequest {
+  string dashboard_id = 1;
+  string permission_id = 2;
+}
+message DeleteDashboardPermissionResponse { bool deleted = 1; }
+
+message RotateDashboardEmbedTokenRequest {
+  string dashboard_id = 1;
+  string actor_id = 2;
+}
+message RotateDashboardEmbedTokenResponse { DashboardEmbedToken token = 1; }
+
+message GetDashboardByEmbedTokenRequest { string token = 1; }
+message GetDashboardByEmbedTokenResponse { DashboardEmbedView dashboard = 1; }
+
+// =============================================================================
+// VocabularyService — per-org business-term annotations (§12.2).
+// =============================================================================
+
+message VocabularyEntry {
+  string id = 1;
+  string organization_id = 2;
+  string column_id = 3;
+  string business_term = 4;
+  repeated string synonyms = 5;
+  repeated string aliases = 6;
+  string unit = 7;
+  string data_type = 8;
+  string format = 9;
+  string description = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+service VocabularyService {
+  rpc ListVocabulary(ListVocabularyRequest) returns (ListVocabularyResponse);
+  rpc CreateVocabulary(CreateVocabularyRequest) returns (CreateVocabularyResponse);
+  rpc UpdateVocabulary(UpdateVocabularyRequest) returns (UpdateVocabularyResponse);
+  rpc DeleteVocabulary(DeleteVocabularyRequest) returns (DeleteVocabularyResponse);
+}
+
+message ListVocabularyRequest {
+  string organization_id = 1;
+  string column_id = 2;    // optional
+  string business_term = 3; // optional ILIKE filter
+}
+message ListVocabularyResponse { repeated VocabularyEntry items = 1; }
+
+message CreateVocabularyRequest {
+  string organization_id = 1;
+  string actor_id = 2;
+  string column_id = 3;
+  string business_term = 4;
+  repeated string synonyms = 5;
+  repeated string aliases = 6;
+  string unit = 7;
+  string data_type = 8;
+  string format = 9;
+  string description = 10;
+}
+message CreateVocabularyResponse { VocabularyEntry entry = 1; }
+
+message UpdateVocabularyRequest {
+  string id = 1;
+  string organization_id = 2;
+  string actor_id = 3;
+  bool update_business_term = 4;
+  string business_term = 5;
+  bool update_synonyms = 6;
+  repeated string synonyms = 7;
+  bool update_aliases = 8;
+  repeated string aliases = 9;
+  bool update_unit = 10;
+  string unit = 11;
+  bool update_data_type = 12;
+  string data_type = 13;
+  bool update_format = 14;
+  string format = 15;
+  bool update_description = 16;
+  string description = 17;
+}
+message UpdateVocabularyResponse { VocabularyEntry entry = 1; }
+
+message DeleteVocabularyRequest {
+  string id = 1;
+  string organization_id = 2;
+}
+message DeleteVocabularyResponse { bool deleted = 1; }
