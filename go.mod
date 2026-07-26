@@ -13,7 +13,7 @@ require (
 	github.com/sentiae/foundry-service v0.1.0
 	github.com/sentiae/ops-service v0.1.0
 	github.com/sentiae/permission-service v0.2.0
-	github.com/sentiae/platform-kit v0.3.14
+	github.com/sentiae/platform-kit v0.3.15
 	github.com/snowflakedb/gosnowflake v1.19.1
 	google.golang.org/api v0.275.0
 	google.golang.org/grpc v1.82.1
